@@ -55,12 +55,20 @@ class TPN(nn.Module):
         self.cls_layer = nn.Conv3d(self.mid_channels, self.n_anchor * 2, 1, 1, 0)
 
     def forward(self, x1, x2):
-        x = self.toi2(x1)
-        x = self.toi5(x2)
-        x = self.conv11(x)
-        x = self.fc6(x)
-        x = self.fc7(x)
-        return self.fc7(x)
+        x1 = self.toi2(x1)
+        x1 = torch.norm(x1, p=None)
+        x2 = self.toi5(x2)
+        x2 = torch.norm(x2, p=None)
+        x = torch.cat((x1, x2), dim=0)
+        reg = self.conv11(x)
+        clf = self.conv11(x)
+        reg = self.fc6(reg)
+        reg = self.fc7(reg)
+        reg = self.reg_layer(reg)
+        clf = self.fc6(clf)
+        clf = self.fc7(clf)
+        clf = self.clf_layer(clf)
+        return reg, clf
 
 
 class TCNN(nn.Module):
@@ -91,7 +99,6 @@ class TCNN(nn.Module):
         self.conv5a = nn.Conv3d(512, 512, (3, 3, 3), padding=1)
         self.conv5b = nn.Conv3d(512, 512, (3, 3, 3), padding=1)
         self.TPN = TPN(512)
-
 
     def forward(self, x):
         """Build a network that maps state -> action values."""
