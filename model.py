@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import numpy as np
 
 
 class _MaxPoolNd(nn.Module):
@@ -23,33 +24,65 @@ class _MaxPoolNd(nn.Module):
 
 
 class Linker:
-    def __init__(self, n_clips=8):
+    def __init__(self, n_clips=4):
         self.n_clips = n_clips
 
-    def link_proposals(self, tube_proposals):
-        prop_seq = []
-        overlap = 0
+    def get_tube_proposals(self, raw_clips):
+        tube_props = np.array([t_prop for t_prop in raw_clips])
+        # cartesian product of tube proposals (tubes from one clip do not have connection)
+        tube_props = np.array(np.meshgrid(tube_props[:, 0], *np.vsplit(tube_props[:, 1:].T, len(tube_props)))).T.reshape(-1, self.n_clips)
+        return tube_props
+
+    def link_proposals(self, raw_clips: list):
+        """
+
+        :list raw_clips: 8-frame list with proposed tubes per frame
+        """
+        # all possible combinations of tube proposals (proposals from the same clip are skipped)
+        tube_proposals = self.get_tube_proposals(raw_clips)
+        scores = []
         for i in range(len(tube_proposals)):
-            overlap += self.count_overlap(tube_proposals[i], tube_proposals[i+1])
-        return prop_seq
+            score = 0
+            overlap = 0
+            # probability that action is found in the i-th clip
+            action_prob = self.compute_actionness(tube_proposals[i][:, -1])
+            for j in range(len(tube_proposals[i])-1):
+                overlap += self.compute_overlap(tube_proposals[i][j, :-1], tube_proposals[i][j+1, :-1])
+            score = self.compute_score(action_prob, overlap)
+            scores.append(score)
+        best_prop_idx = int(np.argmax(scores))
+        best_seq = tube_proposals[best_prop_idx]
+        return best_seq
 
     @staticmethod
-    def count_overlap(tp1, tp2):
+    def compute_overlap(tp1, tp2):
         """
             Computes IoU between last and first frames
-            in corresponding sibling proposals
+            in j-th and j+1-th proposals
         """
-        overlap = 0
+        xA = max(tp1[0], tp2[0])
+        yA = max(tp1[1], tp2[1])
+        xB = min(tp1[2], tp2[2])
+        yB = min(tp1[3], tp2[3])
 
-        return overlap
+        # compute the intersection area
+        inters_area = abs(max((xB - xA, 0)) * max((yB - yA), 0))
+        if inters_area == 0:
+            return 0
+        # compute the area of both boxes
+        tp1_area = abs((tp1[2] - tp1[0]) * (tp1[3] - tp1[1]))
+        tp2_area = abs((tp2[2] - tp2[0]) * (tp2[3] - tp2[1]))
+        iou = inters_area / float(tp1_area + tp2_area - inters_area)
+
+        return iou
 
     @staticmethod
-    def count_actionness(actionness):
+    def compute_actionness(actionness):
         acts = torch.sum(actionness, dim=0)
         return acts
 
-    def compute_score(self, acts, overlap):
-        score = 1/self.n_clips*acts+1/(self.n_clips-1)*overlap
+    def compute_score(self, actss, overlap):
+        score = 1/self.n_clips*actss+1/(self.n_clips-1)*overlap
         return score
 
 
@@ -122,6 +155,7 @@ class TCNN(nn.Module):
         self.conv5a = nn.Conv3d(512, 512, (3, 3, 3), padding=1)
         self.conv5b = nn.Conv3d(512, 512, (3, 3, 3), padding=1)
         self.TPN = TPN(512)
+        self.Linker = Linker()
         self.reg_layer = nn.Conv3d(fc8_units, self.n_anchor * 4, 1, 1, 0)
         self.cls_layer = nn.Conv3d(fc8_units, self.n_anchor * 2, 1, 1, 0)
 
@@ -136,6 +170,6 @@ class TCNN(nn.Module):
         x = F.leaky_relu(self.conv5b(F.leaky_relu(self.conv5a(x))))
         reg = self.reg_layer(x)
         clf = self.cls_layer(x)
-        ref_reg = self.TPN(reg, self.conv2)  # proposed tubes
-
+        tube_props = self.TPN(reg, self.conv2)  # tube proposals for all clips (shape (Nx8xXxYx1))
+        best_t_prop = self.Linker.link_proposals(tube_props)
         return x
