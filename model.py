@@ -20,7 +20,7 @@ class _MaxPoolNd(nn.Module):
 
     def extra_repr(self):
         return 'kernel_size={kernel_size}, stride={stride}, padding={padding}' \
-            ', dilation={dilation}, ceil_mode={ceil_mode}'.format(**self.__dict__)
+               ', dilation={dilation}, ceil_mode={ceil_mode}'.format(**self.__dict__)
 
 
 class Linker:
@@ -30,7 +30,8 @@ class Linker:
     def get_tube_proposals(self, raw_clips):
         tube_props = np.array([t_prop for t_prop in raw_clips])
         # cartesian product of tube proposals (tubes from one clip do not have connection)
-        tube_props = np.array(np.meshgrid(tube_props[:, 0], *np.vsplit(tube_props[:, 1:].T, len(tube_props)))).T.reshape(-1, self.n_clips)
+        tube_props = np.array(
+            np.meshgrid(tube_props[:, 0], *np.vsplit(tube_props[:, 1:].T, len(tube_props)))).T.reshape(-1, self.n_clips)
         return tube_props
 
     def link_proposals(self, raw_clips: list):
@@ -46,8 +47,8 @@ class Linker:
             overlap = 0
             # probability that action is found in the i-th clip
             action_prob = self.compute_actionness(tube_proposals[i][:, -1])
-            for j in range(len(tube_proposals[i])-1):
-                overlap += self.compute_overlap(tube_proposals[i][j, :-1], tube_proposals[i][j+1, :-1])
+            for j in range(len(tube_proposals[i]) - 1):
+                overlap += self.compute_overlap(tube_proposals[i][j, :-1], tube_proposals[i][j + 1, :-1])
             score = self.compute_score(action_prob, overlap)
             scores.append(score)
         best_prop_idx = int(np.argmax(scores))
@@ -82,21 +83,17 @@ class Linker:
         return acts
 
     def compute_score(self, actss, overlap):
-        score = 1/self.n_clips*actss+1/(self.n_clips-1)*overlap
+        score = 1 / self.n_clips * actss + 1 / (self.n_clips - 1) * overlap
         return score
 
 
-class ToiPool(_MaxPoolNd):
-    def __init__(self, kernel_size, d, h, w):
-        super(ToiPool, self).__init__(kernel_size)
-        self.D = d
-        self.height = h
-        self.width = w
+class ToiPool(nn.Module):
+    def __init__(self, d, h, w):
+        super(ToiPool, self).__init__()
+        self.pool = torch.nn.AdaptiveAvgPool3d((d, h, w))
 
-    def forward(self, frame):
-        return F.max_pool2d(frame, self.kernel_size, self.stride,
-                            self.padding, self.dilation, self.ceil_mode,
-                            self.return_indices)
+    def forward(self, tube_props):
+        return self.pool(tube_props)
 
 
 class TPN(nn.Module):
@@ -110,23 +107,36 @@ class TPN(nn.Module):
         super(TPN, self).__init__()
         self.in_channels = input_C  # output feature map
         self.n_anchor = 9  # no. of anchors at each location
-        self.toi2 = ToiPool(3, 8, 8, 8)
-        self.toi5 = ToiPool(3, 1, 4, 4)
-        self.conv11 = nn.Conv1d(512, 8192, 1)
+        self.toi2 = ToiPool(8, 8, 8)
+        self.toi5 = ToiPool(1, 4, 4)
+        self.conv11 = nn.Conv1d(144, 8192, 1)
         self.fc6 = nn.Linear(fc6_units, fc7_units)
         self.fc7 = nn.Linear(fc7_units, fc8_units)
-        self.fc7 = nn.Linear(fc8_units, fc8_units)
+        self.fc8 = nn.Linear(fc8_units, fc8_units)
 
-    def forward(self, reg, conv2):
-        x1 = self.toi2(conv2)
-        x1 = torch.norm(x1, p=None)
-        x2 = self.toi5(reg)
-        x2 = torch.norm(x2, p=None)
-        x = torch.cat((x1, x2), dim=0)
-        reg = self.conv11(x)
-        clf = self.conv11(x)
+    def forward(self, bboxes, conv2):
+        """
+
+        :list bboxes: conv5 output boxes, each being shaped (x1, y1, x2, y2)
+        """
+        # Cx8x150x200, Nx19x25
+        scaled_bboxes = bboxes.copy()
+        scaled_bboxes[:, [0, 2]] *= 150 / 19
+        scaled_bboxes[:, [1, 3]] *= 200 / 25
+        sliced_conv2 = conv2[:, :, scaled_bboxes[:, 0]:scaled_bboxes[:, 2] + 1,
+                             scaled_bboxes[:, 1]:scaled_bboxes[:, 3] + 1]
+        x1 = self.toi2(sliced_conv2)
+        x1 = torch.norm(x1, p=2)  # 8x8x8
+        x2 = self.toi5(bboxes)
+        x2 = x2.repeat(8, 1, 1, 1)  # 8x4x4
+        x2 = torch.norm(x2, p=2)
+        x = torch.cat((x1, x2), dim=1)  # Cx8x12x12
+        x = x.reshape((512, 8, -1))  # CxDx144
+        reg = self.conv11(torch.flatten(x))
+        # C3D pre-trained-model should be used
         reg = self.fc6(reg)
         reg = self.fc7(reg)
+        reg = self.fc8(reg)
         return reg
 
 
@@ -168,8 +178,8 @@ class TCNN(nn.Module):
         x = self.pool4(F.leaky_relu(
             self.conv4b(F.leaky_relu(self.conv4a(x)))))
         x = F.leaky_relu(self.conv5b(F.leaky_relu(self.conv5a(x))))
-        reg = self.reg_layer(x)
-        clf = self.cls_layer(x)
-        tube_props = self.TPN(reg, self.conv2)  # tube proposals for all clips (shape (Nx8xXxYx1))
+        boxes = self.reg_layer(x)
+        action_probs = self.cls_layer(x)
+        tube_props = self.TPN(boxes, self.conv2)  # tube proposals for all clips (shape (Nx8xXxY))
         best_t_prop = self.Linker.link_proposals(tube_props)
         return x
