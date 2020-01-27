@@ -4,6 +4,9 @@ import torch.nn.functional as F
 import numpy as np
 
 
+N_CLASSES = 11 # actions + background
+
+
 class _MaxPoolNd(nn.Module):
     __constants__ = ['kernel_size', 'stride', 'padding', 'dilation',
                      'return_indices', 'ceil_mode']
@@ -97,7 +100,7 @@ class ToiPool(nn.Module):
 
 
 class TPN(nn.Module):
-    def __init__(self, input_C, fc6_units=8192, fc7_units=4096, fc8_units=4096):
+    def __init__(self, input_C, fc6_units=256, fc7_units=512, fc8_units=1024, output=36):
         """Initialize parameters and build model.
         Params
         ======
@@ -105,14 +108,14 @@ class TPN(nn.Module):
             fc7_units (int): Number of nodes in second hidden layer
         """
         super(TPN, self).__init__()
-        self.in_channels = input_C  # output feature map
+        self.in_channels = input_C
         self.n_anchor = 9  # no. of anchors at each location
         self.toi2 = ToiPool(8, 8, 8)
         self.toi5 = ToiPool(1, 4, 4)
         self.conv11 = nn.Conv1d(144, 8192, 1)
-        self.fc6 = nn.Linear(fc6_units, fc7_units)
+        self.fc6 = nn.Linear(512*8*fc6_units, fc7_units)
         self.fc7 = nn.Linear(fc7_units, fc8_units)
-        self.fc8 = nn.Linear(fc8_units, fc8_units)
+        self.fc8 = nn.Linear(fc8_units, output)
 
     def forward(self, bboxes, conv2):
         """
@@ -126,13 +129,14 @@ class TPN(nn.Module):
         sliced_conv2 = conv2[:, :, scaled_bboxes[:, 0]:scaled_bboxes[:, 2] + 1,
                              scaled_bboxes[:, 1]:scaled_bboxes[:, 3] + 1]
         x1 = self.toi2(sliced_conv2)
-        x1 = torch.norm(x1, p=2)  # 8x8x8
+        x1 = torch.norm(x1, p=2)  # Cx8x8x8
         x2 = self.toi5(bboxes)
-        x2 = x2.repeat(8, 1, 1, 1)  # 8x4x4
+        x2 = x2.repeat(1,8, 1, 1, 1)  # Cx8x4x4
         x2 = torch.norm(x2, p=2)
         x = torch.cat((x1, x2), dim=1)  # Cx8x12x12
         x = x.reshape((512, 8, -1))  # CxDx144
-        reg = self.conv11(torch.flatten(x))
+        x = self.conv11(x)
+        reg = torch.flatten(x)
         # C3D pre-trained-model should be used
         reg = self.fc6(reg)
         reg = self.fc7(reg)
@@ -168,6 +172,10 @@ class TCNN(nn.Module):
         self.Linker = Linker()
         self.reg_layer = nn.Conv3d(fc8_units, self.n_anchor * 4, 1, 1, 0)
         self.cls_layer = nn.Conv3d(fc8_units, self.n_anchor * 2, 1, 1, 0)
+        self.toi = ToiPool(8, 9, 9)
+        self.fc6 = nn.Linear(648, 512)
+        self.drop1 = nn.Dropout(0.25)
+        self.fc7 = nn.Linear(512, N_CLASSES)
 
     def forward(self, x):
         """Build a network that maps anchor boxes to a seq. of frames."""
@@ -180,6 +188,13 @@ class TCNN(nn.Module):
         x = F.leaky_relu(self.conv5b(F.leaky_relu(self.conv5a(x))))
         boxes = self.reg_layer(x)
         action_probs = self.cls_layer(x)
-        tube_props = self.TPN(boxes, self.conv2)  # tube proposals for all clips (shape (Nx8xXxY))
-        best_t_prop = self.Linker.link_proposals(tube_props)
+        ref_boxes = self.TPN(boxes, self.conv2)  # tube proposals for all clips (shape (Nx8xXxY))
+        tube_props = ref_boxes.reshape((9, 4)).unsqueeze(0).repeat(8, 1, 1)  # for each frame 9 boxes with 4 params,
+        # NEEDS to be done in TPN (frame-wisely)
+        best_t_prop = self.Linker.link_proposals(tube_props)  # linked tubes
+        x = self.toi(best_t_prop)
+        x = torch.flatten(x)
+        x = F.relu(self.fc6(x))
+        x = self.drop1(x)
+        x = F.relu(self.fc7(x))
         return x
