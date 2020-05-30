@@ -151,12 +151,13 @@ class TCNN(nn.Module):
         """Initialize parameters and build model.
         Params
         ======
+            input_size (tuple): (H, W, D) triplet
             seed (int): Random seed
         """
         super(TCNN, self).__init__()
         self.seed = torch.manual_seed(seed)
         self.n_anchor = 9  # no. of anchors at each location
-        self.conv1 = nn.Conv3d(input_size, 64, (3, 3, 3), padding=1)
+        self.conv1 = nn.Conv3d(input_size[2], 64, (3, 3, 3), padding=1)
         self.pool1 = nn.MaxPool3d((1, 2, 2))
         self.conv2 = nn.Conv3d(64, 128, (3, 3, 3), padding=1)
         self.pool2 = nn.MaxPool3d((2, 2, 2))

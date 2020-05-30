@@ -12,7 +12,6 @@ from skimage import io, transform
 from collections import defaultdict
 
 warnings.filterwarnings("ignore")
-%matplotlib inline
 plt.ion()
 
 
@@ -22,19 +21,18 @@ class ActionsDataset(Dataset):
     def __init__(self, data_map, transform=None):
         """
         Args:
-            csv_file (string): Path to the csv file with annotations.
-            root_dir (string): Directory with all the images.
+            data_map (dict): Dictionary with Category - (images, captions) pairs
             transform (callable, optional): Optional transform to be applied
                 on a sample.
         """
         
         self.cat = list(data_map.keys())
         
-        self.images = {cat:[f
-                for f in data_map[cat]['images']] for cat in self.cat}
+        self.images = {cat:[file
+                for file in data_map[cat]['images']] for cat in self.cat}
         
-        self.bbox = {cat:[np.loadtxt(f, dtype=np.uint8) 
-                for f in data_map[cat]['captions']] for cat in self.cat}
+        self.bbox = {cat:[np.genfromtxt(Path(data_map[list(data_map.keys())[0]]['captions'][0]), dtype=np.uint8)[:-1] 
+                for file in data_map[cat]['captions']] for cat in self.cat}
         
         self.transform = transform
 
