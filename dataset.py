@@ -1,7 +1,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.patches as patches
 import pandas as pd
 import torch
+from PIL import Image
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms, utils
 import warnings
@@ -26,13 +28,14 @@ class ActionsDataset(Dataset):
                 on a sample.
         """
         
-        self.cat = list(data_map.keys())
+        self.cat = list(map(lambda x: x.strip('data/').lower(), data_map.keys()))
+        self.data_map = data_map
         
-        self.images = {cat:[file
-                for file in data_map[cat]['images']] for cat in self.cat}
+        self.images = {cat.strip('data/').lower():[file
+                for file in data_map.get(cat).get('images')] for cat in data_map.keys()}
         
-        self.bbox = {cat:[np.genfromtxt(Path(data_map[list(data_map.keys())[0]]['captions'][0]), dtype=np.uint8)[:-1] 
-                for file in data_map[cat]['captions']] for cat in self.cat}
+        self.bbox = {cat.strip('data/').lower():[np.genfromtxt(file, dtype=np.int16)[:-1] 
+                for file in data_map.get(cat).get('captions')] for cat in data_map.keys()}
         
         self.transform = transform
 
@@ -43,13 +46,13 @@ class ActionsDataset(Dataset):
         if torch.is_tensor(idx):
             idx = idx.tolist()
 
-        img = io.imread(self.data_map[cat][index])
+        img = Image.open(self.images[cat][idx])
         img = img.convert('RGB')
         
         if self.transform is not None:
             img = self.transform(img)
             
-        bbox = torch.from_numpy(self.bbox[cat][index])
+        bbox = torch.from_numpy(self.bbox[cat][idx])
     
         sample = {'image': img, 'bbox': bbox}
 
@@ -66,7 +69,7 @@ if __name__ == "__main__":
     data_map = defaultdict(dict)
 
     for cat in DATA.iterdir():
-        for batch in Path(d).iterdir():
+        for batch in Path(cat).iterdir():
             images = glob.glob(str(batch)+'/*.jpg')
             captions = glob.glob(str(batch)+'/gt/*.txt')
             data_map[str(cat)]['images'] = images
@@ -79,3 +82,14 @@ if __name__ == "__main__":
     plt.show()
 
     dataset = ActionsDataset(data_map)
+    
+    cat = 'diving-side'
+    idx = 0
+    sample = data.__getitem__(cat, idx)
+    x,y, h, w = sample['bbox'].data
+    fig, ax = plt.subplots(1)
+    ax.imshow(sample['image'])
+    box = patches.Rectangle((x,y),h,w, edgecolor='r', facecolor="none")
+    ax.add_patch(box)
+    plt.title(sample['bbox'])
+    plt.show()

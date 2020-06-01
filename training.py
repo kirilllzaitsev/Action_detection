@@ -24,8 +24,12 @@ if __name__ == "__main__":
         for batch in Path(cat).iterdir():
             images = glob.glob(str(batch)+'/*.jpg')
             captions = glob.glob(str(batch)+'/gt/*.txt')
-            data_map[str(cat)]['images'] = images
-            data_map[str(cat)]['captions'] = captions
+            if data_map.get(str(cat)) is None:
+                data_map[str(cat)]['images'] = sorted(images)
+                data_map[str(cat)]['captions'] = sorted(captions)
+            else:
+                data_map[str(cat)]['images'] = data_map[str(cat)]['images']+sorted(images)
+                data_map[str(cat)]['captions'] = data_map[str(cat)]['captions']+sorted(captions)
             
     input_size = (300, 300, 3)
     seed = 38
