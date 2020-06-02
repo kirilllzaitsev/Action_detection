@@ -5,11 +5,13 @@ import torch.optim as optim
 import numpy as np
 import matplotlib.pyplot as plt
 import glob
+import warnings
+
+from torch.utils.data.sampler import SubsetRandomSampler
 from pathlib import Path
 from dataset import ActionsDataset
 from model import TCNN as Net
 from collections import defaultdict
-import warnings
 
 warnings.filterwarnings('ignore')
 
@@ -36,24 +38,44 @@ if __name__ == "__main__":
 
     net = Net(input_size, seed)
     
-    criterion = nn.MSELoss()
+    criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
 
-    data = ActionsDataset(data_map)
-    train_data = None; test_data = None
+    dataset = ActionsDataset(data_map)
+    
+    batch_size = 8
+    validation_split = .2
+    shuffle_dataset = True
+    random_seed= 38
+
+    # Creating data indices for training and validation splits:
+    dataset_size = len(dataset)
+    indices = list(range(dataset_size))
+    split = int(np.floor(validation_split * dataset_size))
+    if shuffle_dataset :
+        np.random.seed(random_seed)
+        np.random.shuffle(indices)
+    train_indices, val_indices = indices[split:], indices[:split]
+
+    train_sampler = SubsetRandomSampler(train_indices)
+    valid_sampler = SubsetRandomSampler(val_indices)
+
+    train_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, 
+                                               sampler=train_sampler)
+    validation_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size,
+                                                    sampler=valid_sampler)    
 
     EPOCHS = 10
 
     for epoch in range(EPOCHS):
 
         running_loss = 0.0
-        for i, data in enumerate(train_data, 0):
-            inputs, labels = data
-
+        for batch_index, (images, bboxs) in enumerate(train_loader):
+            
             optimizer.zero_grad()
-            out = net(inputs)
+            out = net(images)
 
-            loss = criterion(out, labels)
+            loss = criterion(out, bboxs)
             loss.backward()
             optimizer.step()
 
