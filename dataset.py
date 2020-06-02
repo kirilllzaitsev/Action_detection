@@ -12,6 +12,7 @@ import glob
 from pathlib import Path
 from skimage import io, transform
 from collections import defaultdict
+from utils import plot_data_sample, plot_transformed_data_sample
 
 warnings.filterwarnings("ignore")
 plt.ion()
@@ -48,16 +49,16 @@ class ActionsDataset(Dataset):
 
         img = Image.open(self.images[cat][idx])
         img = img.convert('RGB')
-        
-        if self.transform is not None:
-            img = self.transform(img)
             
         bbox = torch.from_numpy(self.bbox[cat][idx])
-    
-        sample = {'image': img, 'bbox': bbox}
-
+       
         if self.transform:
-            sample = self.transform(sample)
+            img = self.transform(img)
+            ratio_x, ratio_y = 300 / img.shape[0], 300 / img.shape[1]
+            bbox[0, 2] *= ratio_x
+            bbox[1, 3] *= ratio_y
+
+        sample = {'image': img, 'bbox': bbox}
 
         return sample
 
@@ -75,21 +76,19 @@ if __name__ == "__main__":
             data_map[str(cat)]['images'] = images
             data_map[str(cat)]['captions'] = captions
 
-    plt.figure()
-    plt.imshow(io.imread(data_map[list(data_map.keys())[0]]['images'][0]))
-    plt.title('BBox coordinates: '+
-            open(data_map[list(data_map.keys())[0]]['captions'][0]).read())
-    plt.show()
-
-    dataset = ActionsDataset(data_map)
+  
+    transform = transforms.Compose([
+        transforms.Resize((300,300)),
+        transforms.ToTensor(),
+        transforms.Normalize((0.485, 0.456, 0.406),
+                             (0.229, 0.224, 0.225)),
+        transforms.RandomErasing(),
+    ])
     
-    cat = 'diving-side'
-    idx = 0
-    sample = data.__getitem__(cat, idx)
-    x,y, h, w = sample['bbox'].data
-    fig, ax = plt.subplots(1)
-    ax.imshow(sample['image'])
-    box = patches.Rectangle((x,y),h,w, edgecolor='r', facecolor="none")
-    ax.add_patch(box)
-    plt.title(sample['bbox'])
-    plt.show()
+    dataset = ActionsDataset(data_map, transform)
+    
+    plot_data_sample(dataset, 'diving-side', 0)
+    plot_transformed_data_sample(dataset, 'diving-side', 0, transform)
+    
+    
+
