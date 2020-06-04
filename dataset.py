@@ -32,32 +32,33 @@ class ActionsDataset(Dataset):
         self.cat = list(map(lambda x: x.strip('data/').lower(), data_map.keys()))
         self.data_map = data_map
         
-        self.images = {cat.strip('data/').lower():[file
-                for file in data_map.get(cat).get('images')] for cat in data_map.keys()}
+        self.images = np.concatenate([data_map.get(cat).get('images') for cat in data_map.keys()]).ravel()
         
-        self.bbox = {cat.strip('data/').lower():[np.genfromtxt(file, dtype=np.int16)[:-1] 
-                for file in data_map.get(cat).get('captions')] for cat in data_map.keys()}
+        self.bbox = np.concatenate([data_map.get(cat).get('captions') for cat in data_map.keys()]).ravel()        
+        self.bbox = np.array(list(map(lambda x: np.genfromtxt(x, dtype=np.int16)[:-1], self.bbox)))
         
         self.transform = transform
 
     def __len__(self):
-        return len(self.cat)*len(self.bbox[self.cat[0]])
+        return len(self.images)
 
-    def __getitem__(self, cat, idx):
+    def __getitem__(self, idx):
         if torch.is_tensor(idx):
             idx = idx.tolist()
 
-        img = Image.open(self.images[cat][idx])
+        img = Image.open(self.images[idx])
         img = img.convert('RGB')
             
-        bbox = torch.from_numpy(self.bbox[cat][idx])
-       
+        bbox = self.bbox[idx]
+        print(bbox)
         if self.transform:
+            ratio_x, ratio_y = 300 / img.size[0], 300 / img.size[1]
             img = self.transform(img)
-            ratio_x, ratio_y = 300 / img.shape[0], 300 / img.shape[1]
-            bbox[0, 2] *= ratio_x
-            bbox[1, 3] *= ratio_y
+            
+            bbox[0] *= ratio_x; bbox[2] *= ratio_x
+            bbox[1] *= ratio_y; bbox[3] *= ratio_y
 
+        bbox = torch.from_numpy(bbox)
         sample = {'image': img, 'bbox': bbox}
 
         return sample
