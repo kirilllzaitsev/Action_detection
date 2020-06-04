@@ -12,6 +12,7 @@ from pathlib import Path
 from dataset import ActionsDataset
 from model import TCNN as Net
 from collections import defaultdict
+from preprocessing import add_missing_frames
 
 warnings.filterwarnings('ignore')
 
@@ -23,9 +24,13 @@ if __name__ == "__main__":
     data_map = defaultdict(dict)
 
     for cat in DATA.iterdir():
+        if str(cat) == 'data/Lifting':
+            continue
         for batch in Path(cat).iterdir():
             images = glob.glob(str(batch)+'/*.jpg')
             captions = glob.glob(str(batch)+'/gt/*.txt')
+            if len(captions) < 10:
+                continue
             if data_map.get(str(cat)) is None:
                 data_map[str(cat)]['images'] = sorted(images)
                 data_map[str(cat)]['captions'] = sorted(captions)
@@ -41,7 +46,16 @@ if __name__ == "__main__":
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
 
-    dataset = ActionsDataset(data_map)
+    transform = transforms.Compose([
+        transforms.Resize((300,300)),
+        transforms.ToTensor(),
+        transforms.RandomErasing(),
+        transforms.Normalize((0.485, 0.456, 0.406),
+                             (0.229, 0.224, 0.225)),
+
+    ])
+    
+    dataset = ActionsDataset(data_map, transform)
     
     batch_size = 8
     validation_split = .2
