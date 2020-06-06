@@ -50,7 +50,6 @@ class ActionsDataset(Dataset):
         img = img.convert('RGB')
             
         bbox = self.bbox[idx]
-        print(bbox)
         if self.transform:
             ratio_x, ratio_y = 300 / img.size[0], 300 / img.size[1]
             img = self.transform(img)
@@ -71,11 +70,19 @@ if __name__ == "__main__":
     data_map = defaultdict(dict)
 
     for cat in DATA.iterdir():
+        if str(cat) == 'data/Lifting':
+            continue
         for batch in Path(cat).iterdir():
             images = glob.glob(str(batch)+'/*.jpg')
             captions = glob.glob(str(batch)+'/gt/*.txt')
-            data_map[str(cat)]['images'] = images
-            data_map[str(cat)]['captions'] = captions
+            if len(captions) < 10:
+                continue
+            if not data_map.get(str(cat)):
+                data_map[str(cat)]['images'] = sorted(images)
+                data_map[str(cat)]['captions'] = sorted(captions)
+            else:
+                data_map[str(cat)]['images'] = data_map[str(cat)]['images']+sorted(images)
+                data_map[str(cat)]['captions'] = data_map[str(cat)]['captions']+sorted(captions)
 
   
     transform = transforms.Compose([
@@ -88,8 +95,8 @@ if __name__ == "__main__":
     
     dataset = ActionsDataset(data_map, transform)
     
-    plot_data_sample(dataset, 'diving-side', 0)
-    plot_transformed_data_sample(dataset, 'diving-side', 0, transform)
+    plot_data_sample(dataset, 0)
+    plot_transformed_data_sample(dataset, 0, transform)
     
     
 
