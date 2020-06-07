@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-
+import pdb
 
 N_CLASSES = 11 # actions + background
 
@@ -123,10 +123,10 @@ class TPN(nn.Module):
         :list bboxes: conv5 output boxes, each being shaped (x1, y1, x2, y2)
         """
         # Cx8x150x200, Nx19x25
-        scaled_bboxes = bboxes.copy()
+        scaled_bboxes = bboxes.clone().detach()
         scaled_bboxes[:, [0, 2]] *= 150 / 19
         scaled_bboxes[:, [1, 3]] *= 200 / 25
-        sliced_conv2 = conv2[:, :, scaled_bboxes[:, 0]:scaled_bboxes[:, 2] + 1,
+        sliced_conv2 = conv2.data[:, :, scaled_bboxes[:, 0]:scaled_bboxes[:, 2] + 1,
                              scaled_bboxes[:, 1]:scaled_bboxes[:, 3] + 1]
         x1 = self.toi2(sliced_conv2)
         x1 = torch.norm(x1, p=2)  # Cx8x8x8
@@ -154,10 +154,10 @@ class TCNN(nn.Module):
             input_size (tuple): (H, W, D) triplet
             seed (int): Random seed
         """
-        super(TCNN, self).__init__()
+        super().__init__()
         self.seed = torch.manual_seed(seed)
         self.n_anchor = 9  # no. of anchors at each location
-        self.conv1 = nn.Conv3d(input_size[2], 64, (3, 3, 3), padding=1)
+        self.conv1 = nn.Conv3d(3, 64, (3, 3, 3), padding=1)
         self.pool1 = nn.MaxPool3d((1, 2, 2))
         self.conv2 = nn.Conv3d(64, 128, (3, 3, 3), padding=1)
         self.pool2 = nn.MaxPool3d((2, 2, 2))
@@ -187,10 +187,10 @@ class TCNN(nn.Module):
         x = self.pool4(F.leaky_relu(
             self.conv4b(F.leaky_relu(self.conv4a(x)))))
         x = F.leaky_relu(self.conv5b(F.leaky_relu(self.conv5a(x))))
-        boxes = self.reg_layer(x)
-        action_probs = self.cls_layer(x)
-        ref_boxes = self.TPN(boxes, self.conv2)  # tube proposals for all clips (shape (Nx8xXxY))
-        tube_props = ref_boxes.reshape((9, 4)).unsqueeze(0).repeat(8, 1, 1)  # for each frame 9 boxes with 4 params,
+#         pdb.set_trace()
+        
+        boxes = self.TPN(x, self.conv2)  # tube proposals for all clips (shape (Nx8xXxY))
+        tube_props = boxes.reshape((9, 4)).unsqueeze(0).repeat(8, 1, 1)  # for each frame 9 boxes with 4 params,
         # NEEDS to be done in TPN (frame-wisely)
         best_t_prop = self.Linker.link_proposals(tube_props)  # linked tubes
         x = self.toi(best_t_prop)
