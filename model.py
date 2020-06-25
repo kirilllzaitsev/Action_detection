@@ -99,13 +99,20 @@ class ToiPool(nn.Module):
         return self.pool(tube_props)
 
 
+class BBoxRegressor:
+    def __init__(self, feature_cube):
+        raise NotImplementedError
+        
+    def gen_bboxes(self):
+        raise NotImplementedError
+    
+    
 class TPN(nn.Module):
     def __init__(self, input_C, fc6_units=256, fc7_units=512, fc8_units=1024, output=36):
         """Initialize parameters and build model.
-        Params
-        ======
-            fc6_units (int): Number of nodes in first hidden layer
-            fc7_units (int): Number of nodes in second hidden layer
+        
+        :int    fc6_units : Number of nodes in first hidden layer
+        :int    fc7_units : Number of nodes in second hidden layer
         """
         super(TPN, self).__init__()
         self.in_channels = input_C
@@ -117,15 +124,19 @@ class TPN(nn.Module):
         self.fc7 = nn.Linear(fc7_units, fc8_units)
         self.fc8 = nn.Linear(fc8_units, output)
 
-    def forward(self, bboxes, conv2):
+    def forward(self, conv5, conv2):
         """
 
-        :list bboxes: conv5 output boxes, each being shaped (x1, y1, x2, y2)
+        :tensor conv5: conv5 feature cube (512x1x19x25)
+        :tensor conv2: conv2 feature cube (64x8x150x200)
         """
         # Cx8x150x200, Nx19x25
+        pdb.set_trace()
+        bboxes = BBoxRegressor(conv5)
         scaled_bboxes = bboxes.clone().detach()
         scaled_bboxes[:, [0, 2]] *= 150 / 19
         scaled_bboxes[:, [1, 3]] *= 200 / 25
+        scaled_bboxes = scaled_bboxes.astype(torch.int16)
         sliced_conv2 = conv2.data[:, :, scaled_bboxes[:, 0]:scaled_bboxes[:, 2] + 1,
                              scaled_bboxes[:, 1]:scaled_bboxes[:, 3] + 1]
         x1 = self.toi2(sliced_conv2)
@@ -137,7 +148,7 @@ class TPN(nn.Module):
         x = x.reshape((512, 8, -1))  # CxDx144
         x = self.conv11(x)
         reg = torch.flatten(x)
-        # C3D pre-trained-model should be used
+        
         reg = self.fc6(reg)
         reg = self.fc7(reg)
         reg = self.fc8(reg)
@@ -149,13 +160,12 @@ class TCNN(nn.Module):
 
     def __init__(self, input_size, seed, fc8_units=4096):
         """Initialize parameters and build model.
-        Params
-        ======
-            input_size (tuple): (H, W, D) triplet
-            seed (int): Random seed
+        :tuple    input_size (tuple): (H, W, D) triplet
+        :int      seed : Random seed
         """
         super().__init__()
         self.seed = torch.manual_seed(seed)
+        self.input_size = input_size
         self.n_anchor = 9  # no. of anchors at each location
         self.conv1 = nn.Conv3d(3, 64, (3, 3, 3), padding=1)
         self.pool1 = nn.MaxPool3d((1, 2, 2))
@@ -163,7 +173,7 @@ class TCNN(nn.Module):
         self.pool2 = nn.MaxPool3d((2, 2, 2))
         self.conv3a = nn.Conv3d(128, 256, (3, 3, 3), padding=1)
         self.conv3b = nn.Conv3d(256, 256, (3, 3, 3), padding=1)
-        self.pool3 = nn.MaxPool3d((2, 2, 2))
+        self.pool3 = nn.MaxPool3d((2, 2, 2), ceil_mode=True)
         self.conv4a = nn.Conv3d(256, 512, (3, 3, 3), padding=1)
         self.conv4b = nn.Conv3d(512, 512, (3, 3, 3), padding=1)
         self.pool4 = nn.MaxPool3d((2, 2, 2))
@@ -180,18 +190,22 @@ class TCNN(nn.Module):
 
     def forward(self, x):
         """Build a network that maps anchor boxes to a seq. of frames."""
+#         pdb.set_trace()
         x = self.pool1(F.leaky_relu(self.conv1(x)))
-        x = self.pool2(F.leaky_relu(self.conv2(x)))
+        conv2 = F.leaky_relu(self.conv2(x))
+        x = self.pool2(conv2)
         x = self.pool3(F.leaky_relu(
             self.conv3b(F.leaky_relu(self.conv3a(x)))))
+        
         x = self.pool4(F.leaky_relu(
             self.conv4b(F.leaky_relu(self.conv4a(x)))))
         x = F.leaky_relu(self.conv5b(F.leaky_relu(self.conv5a(x))))
-#         pdb.set_trace()
         
-        boxes = self.TPN(x, self.conv2)  # tube proposals for all clips (shape (Nx8xXxY))
-        tube_props = boxes.reshape((9, 4)).unsqueeze(0).repeat(8, 1, 1)  # for each frame 9 boxes with 4 params,
-        # NEEDS to be done in TPN (frame-wisely)
+        assert all(dim in x.size() for dim in [1,19,25])
+        
+        boxes = self.TPN(x, conv2)  # tube proposals for all clips (shape (Nx8xXxY))
+        tube_props = boxes.reshape((9, 4)).unsqueeze(0).repeat(8, 1, 1)  # for each frame 9 boxes with (x,y,h,w)
+        
         best_t_prop = self.Linker.link_proposals(tube_props)  # linked tubes
         x = self.toi(best_t_prop)
         x = torch.flatten(x)
