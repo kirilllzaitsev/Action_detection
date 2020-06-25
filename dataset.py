@@ -51,7 +51,7 @@ class ActionsDataset(Dataset):
             
         bbox = self.bbox[idx]
         if self.transform:
-            ratio_x, ratio_y = 300 / img.size[0], 300 / img.size[1]
+            ratio_x, ratio_y = 300 / img.size[0], 400 / img.size[1]
             img = self.transform(img)
             
             bbox[0] *= ratio_x; bbox[2] *= ratio_x
@@ -86,7 +86,7 @@ if __name__ == "__main__":
 
   
     transform = transforms.Compose([
-        transforms.Resize((300,300)),
+        transforms.Resize((300,400)),
         transforms.ToTensor(),
         transforms.Normalize((0.485, 0.456, 0.406),
                              (0.229, 0.224, 0.225)),
