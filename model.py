@@ -30,19 +30,19 @@ class Linker:
     def __init__(self, n_clips=4):
         self.n_clips = n_clips
 
-    def get_tube_proposals(self, raw_clips):
+    def get_tube_proposals(self, raw_clips: list) -> np.array:
         tube_props = np.array([t_prop for t_prop in raw_clips])
         # cartesian product of tube proposals (tubes from one clip do not have connection)
         tube_props = np.array(
             np.meshgrid(tube_props[:, 0], *np.vsplit(tube_props[:, 1:].T, len(tube_props)))).T.reshape(-1, self.n_clips)
         return tube_props
 
-    def link_proposals(self, raw_clips: list):
+    def link_proposals(self, raw_clips: list) -> np.array:
         """
 
         :list raw_clips: 8-frame list with proposed tubes per frame
         """
-        # all possible combinations of tube proposals (proposals from the same clip are skipped)
+        # possible combinations of tube proposals (proposals from the same clip are skipped)
         tube_proposals = self.get_tube_proposals(raw_clips)
         scores = []
         for i in range(len(tube_proposals)):
@@ -59,7 +59,7 @@ class Linker:
         return best_seq
 
     @staticmethod
-    def compute_overlap(tp1, tp2):
+    def compute_overlap(tp1: np.array, tp2: np.array) -> float:
         """
             Computes IoU between last and first frames
             in j-th and j+1-th proposals
@@ -81,34 +81,40 @@ class Linker:
         return iou
 
     @staticmethod
-    def compute_actionness(actionness):
+    def compute_actionness(actionness:np.array) -> torch.float:
         acts = torch.sum(actionness, dim=0)
         return acts
 
-    def compute_score(self, actss, overlap):
+    def compute_score(self, actss:torch.float, overlap:float) -> torch.float:
         score = 1 / self.n_clips * actss + 1 / (self.n_clips - 1) * overlap
         return score
 
 
 class ToiPool(nn.Module):
-    def __init__(self, d, h, w):
+    def __init__(self, d:int, h:int, w:int):
         super(ToiPool, self).__init__()
         self.pool = torch.nn.AdaptiveAvgPool3d((d, h, w))
 
-    def forward(self, tube_props):
+    def forward(self, tube_props:np.array) -> torch.tensor:
         return self.pool(tube_props)
 
 
 class BBoxRegressor:
-    def __init__(self, feature_cube):
-        raise NotImplementedError
+    def __init__(self, n_boxes:int=9):
+        self.n_boxes = n_boxes
+        self.c1_1 = nn.Conv1d(512, 36, (1,1))
+        self.c1_2 = nn.Conv1d(512, 18, (1,1))
         
-    def gen_bboxes(self):
-        raise NotImplementedError
+    def gen_boxes(self, x:torch.tensor) -> (torch.tensor, torch.tensor):
+        h, w = x.size()[2:]
+        bboxes = self.c1_1(x).reshape(h, w, 9, 4)
+        action_scores = self.c1_2(x).reshape(h, w, 9, 1)
+        return bboxes, action_scores  
     
     
 class TPN(nn.Module):
-    def __init__(self, input_C, fc6_units=256, fc7_units=512, fc8_units=1024, output=36):
+    def __init__(self, input_C:int, fc6_units:int=256,
+                 fc7_units:int=512, fc8_units:int=1024, output:int=36):
         """Initialize parameters and build model.
         
         :int    fc6_units : Number of nodes in first hidden layer
@@ -124,7 +130,7 @@ class TPN(nn.Module):
         self.fc7 = nn.Linear(fc7_units, fc8_units)
         self.fc8 = nn.Linear(fc8_units, output)
 
-    def forward(self, conv5, conv2):
+    def forward(self, conv5:torch.tensor, conv2:torch.tensor):
         """
 
         :tensor conv5: conv5 feature cube (512x1x19x25)
@@ -158,7 +164,7 @@ class TPN(nn.Module):
 class TCNN(nn.Module):
     """End-to-end action detection model"""
 
-    def __init__(self, input_size, seed, fc8_units=4096):
+    def __init__(self, input_size:tuple, seed:int, fc8_units:int=4096):
         """Initialize parameters and build model.
         :tuple    input_size (tuple): (H, W, D) triplet
         :int      seed : Random seed
@@ -179,6 +185,7 @@ class TCNN(nn.Module):
         self.pool4 = nn.MaxPool3d((2, 2, 2))
         self.conv5a = nn.Conv3d(512, 512, (3, 3, 3), padding=1)
         self.conv5b = nn.Conv3d(512, 512, (3, 3, 3), padding=1)
+        self.BBoxRegressor = BBoxRegressor()
         self.TPN = TPN(512)
         self.Linker = Linker()
         self.reg_layer = nn.Conv3d(fc8_units, self.n_anchor * 4, 1, 1, 0)
@@ -190,7 +197,7 @@ class TCNN(nn.Module):
 
     def forward(self, x):
         """Build a network that maps anchor boxes to a seq. of frames."""
-#         pdb.set_trace()
+        pdb.set_trace()
         x = self.pool1(F.leaky_relu(self.conv1(x)))
         conv2 = F.leaky_relu(self.conv2(x))
         x = self.pool2(conv2)
@@ -201,12 +208,11 @@ class TCNN(nn.Module):
             self.conv4b(F.leaky_relu(self.conv4a(x)))))
         x = F.leaky_relu(self.conv5b(F.leaky_relu(self.conv5a(x))))
         
-        assert all(dim in x.size() for dim in [1,19,25])
+        bboxes, action_scores = self.BBoxRegressor.gen_boxes(x)
+        ref_bboxes = self.TPN(bboxes, conv2)
+        tube_props = ref_bboxes.repeat(8, 1, 1)  # for each frame 9 boxes with (x,y,h,w)
         
-        boxes = self.TPN(x, conv2)  # tube proposals for all clips (shape (Nx8xXxY))
-        tube_props = boxes.reshape((9, 4)).unsqueeze(0).repeat(8, 1, 1)  # for each frame 9 boxes with (x,y,h,w)
-        
-        best_t_prop = self.Linker.link_proposals(tube_props)  # linked tubes
+        ref_tube_props = self.Linker.link_proposals(tube_props)
         x = self.toi(best_t_prop)
         x = torch.flatten(x)
         x = F.relu(self.fc6(x))

@@ -2,7 +2,7 @@ import numpy as np
 import cv2
 from pathlib import Path
 
-def add_missing_frames(video: Path):
+def add_missing_frames(video: Path) -> None:
     vidcap = cv2.VideoCapture(str(video))
     write_dir = str(video.parent)
     success,image = vidcap.read()

@@ -38,7 +38,7 @@ if __name__ == "__main__":
                 data_map[str(cat)]['images'] = data_map[str(cat)]['images']+sorted(images)
                 data_map[str(cat)]['captions'] = data_map[str(cat)]['captions']+sorted(captions)
             
-    input_size = (300, 300, 3)
+    input_size = (300, 400, 3)
     seed = 38
 
     net = Net(input_size, seed)
@@ -47,7 +47,7 @@ if __name__ == "__main__":
     optimizer = optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
 
     transform = transforms.Compose([
-        transforms.Resize((300,300)),
+        transforms.Resize((300,400)),
         transforms.ToTensor(),
         transforms.RandomErasing(),
         transforms.Normalize((0.485, 0.456, 0.406),
@@ -84,12 +84,12 @@ if __name__ == "__main__":
     for epoch in range(EPOCHS):
 
         running_loss = 0.0
-        for batch_index, (images, bboxs) in enumerate(train_loader):
-            
+        for batch_index, data in enumerate(train_loader):
             optimizer.zero_grad()
-            out = net(images)
 
-            loss = criterion(out, bboxs)
+            out = net(torch.transpose(torch.transpose(data['image'].unsqueeze(1), 1,0),1,2))
+
+            loss = criterion(out, data['bbox'])
             loss.backward()
             optimizer.step()
 
