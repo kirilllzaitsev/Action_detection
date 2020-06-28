@@ -7,25 +7,6 @@ import pdb
 N_CLASSES = 11 # actions + background
 
 
-class _MaxPoolNd(nn.Module):
-    __constants__ = ['kernel_size', 'stride', 'padding', 'dilation',
-                     'return_indices', 'ceil_mode']
-
-    def __init__(self, kernel_size, stride=None, padding=0, dilation=1,
-                 return_indices=False, ceil_mode=False):
-        super(_MaxPoolNd, self).__init__()
-        self.kernel_size = kernel_size
-        self.stride = stride or kernel_size
-        self.padding = padding
-        self.dilation = dilation
-        self.return_indices = return_indices
-        self.ceil_mode = ceil_mode
-
-    def extra_repr(self):
-        return 'kernel_size={kernel_size}, stride={stride}, padding={padding}' \
-               ', dilation={dilation}, ceil_mode={ceil_mode}'.format(**self.__dict__)
-
-
 class Linker:
     def __init__(self, n_clips=4):
         self.n_clips = n_clips
@@ -103,24 +84,25 @@ class BBoxRegressor:
     def __init__(self, n_boxes:int=9):
         self.n_boxes = n_boxes
         self.c1_1 = nn.Conv1d(512, 36, (1,1))
-        self.c1_2 = nn.Conv1d(512, 18, (1,1))
+        self.c1_2 = nn.Conv1d(512, 9, (1,1))
         
     def gen_boxes(self, x:torch.tensor) -> (torch.tensor, torch.tensor):
-        h, w = x.size()[2:]
+        h, w = x.size()[-2:]
+        x = torch.squeeze(x, dim=2)
         bboxes = self.c1_1(x).reshape(h, w, 9, 4)
         action_scores = self.c1_2(x).reshape(h, w, 9, 1)
         return bboxes, action_scores  
     
     
-class TPN(nn.Module):
+class TPN:
     def __init__(self, input_C:int, fc6_units:int=256,
                  fc7_units:int=512, fc8_units:int=1024, output:int=36):
         """Initialize parameters and build model.
-        
+
         :int    fc6_units : Number of nodes in first hidden layer
         :int    fc7_units : Number of nodes in second hidden layer
         """
-        super(TPN, self).__init__()
+        
         self.in_channels = input_C
         self.n_anchor = 9  # no. of anchors at each location
         self.toi2 = ToiPool(8, 8, 8)
@@ -130,22 +112,30 @@ class TPN(nn.Module):
         self.fc7 = nn.Linear(fc7_units, fc8_units)
         self.fc8 = nn.Linear(fc8_units, output)
 
-    def forward(self, conv5:torch.tensor, conv2:torch.tensor):
+    def update_boxes(self, bboxes:torch.tensor, conv2:torch.tensor):
         """
 
-        :tensor conv5: conv5 feature cube (512x1x19x25)
+        :tensor bboxes: bboxes from conv5 (19x25x9x4); 4 -> H, W, x, y
         :tensor conv2: conv2 feature cube (64x8x150x200)
         """
-        # Cx8x150x200, Nx19x25
+
         pdb.set_trace()
-        bboxes = BBoxRegressor(conv5)
-        scaled_bboxes = bboxes.clone().detach()
-        scaled_bboxes[:, [0, 2]] *= 150 / 19
-        scaled_bboxes[:, [1, 3]] *= 200 / 25
-        scaled_bboxes = scaled_bboxes.astype(torch.int16)
-        sliced_conv2 = conv2.data[:, :, scaled_bboxes[:, 0]:scaled_bboxes[:, 2] + 1,
-                             scaled_bboxes[:, 1]:scaled_bboxes[:, 3] + 1]
-        x1 = self.toi2(sliced_conv2)
+
+        #TODO: inspect why values in bboxes are << 1
+        scaled_bboxes = bboxes.detach().clone()
+        scaled_bboxes[:,:,:, [0, 3]] *= 150 / 19  # update H, y
+        scaled_bboxes[:,:,:, [1, 2]] *= 200 / 25  # update W, x
+        scaled_bboxes = scaled_bboxes.numpy().astype(np.int64)
+        scaled_bboxes.resize(150,200,9,4, refcheck=False)
+        
+        # slice out tubes from conv2 feature map
+        tubes = conv2.data[:, :, :,
+                           scaled_bboxes[:,:,:,2]-scaled_bboxes[:,:,:, 1]/2:\
+                           scaled_bboxes[:,:,:,2]+scaled_bboxes[:,:,:, 1]/2,
+                           scaled_bboxes[:,:,:,3]-scaled_bboxes[:,:,:, 0]/2:\
+                           scaled_bboxes[:,:,:,3]+scaled_bboxes[:,:,:, 0]/2] 
+        
+        x1 = self.toi2(tubes)
         x1 = torch.norm(x1, p=2)  # Cx8x8x8
         x2 = self.toi5(bboxes)
         x2 = x2.repeat(1,8, 1, 1, 1)  # Cx8x4x4
@@ -154,7 +144,7 @@ class TPN(nn.Module):
         x = x.reshape((512, 8, -1))  # CxDx144
         x = self.conv11(x)
         reg = torch.flatten(x)
-        
+
         reg = self.fc6(reg)
         reg = self.fc7(reg)
         reg = self.fc8(reg)
@@ -209,7 +199,7 @@ class TCNN(nn.Module):
         x = F.leaky_relu(self.conv5b(F.leaky_relu(self.conv5a(x))))
         
         bboxes, action_scores = self.BBoxRegressor.gen_boxes(x)
-        ref_bboxes = self.TPN(bboxes, conv2)
+        ref_bboxes = self.TPN.update_boxes(bboxes, conv2.detach().clone())
         tube_props = ref_bboxes.repeat(8, 1, 1)  # for each frame 9 boxes with (x,y,h,w)
         
         ref_tube_props = self.Linker.link_proposals(tube_props)
