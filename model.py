@@ -81,16 +81,23 @@ class ToiPool(nn.Module):
 
 
 class BBoxRegressor:
-    def __init__(self, n_boxes:int=9):
+    def __init__(self, input_size:tuple, n_boxes:int=9):
         self.n_boxes = n_boxes
         self.c1_1 = nn.Conv1d(512, 36, (1,1))
         self.c1_2 = nn.Conv1d(512, 9, (1,1))
+        h, w = input_size
+        self.fc_bboxes = nn.Linear(h*w*36, 36)
+        self.fc_ascores = nn.Linear(h*w*9, 9)
         
     def gen_boxes(self, x:torch.tensor) -> (torch.tensor, torch.tensor):
         h, w = x.size()[-2:]
         x = torch.squeeze(x, dim=2)
-        bboxes = self.c1_1(x).reshape(h, w, 9, 4)
-        action_scores = self.c1_2(x).reshape(h, w, 9, 1)
+        bboxes = self.c1_1(x)
+        bboxes = bboxes.view(-1)
+        bboxes = self.fc_bboxes(bboxes).reshape(9,4)
+        action_scores = self.c1_2(x)
+        action_scores = ascores.view(-1)
+        action_scores = self.fc_ascores(ascores).reshape(9,1)
         return bboxes, action_scores  
     
     
@@ -121,19 +128,17 @@ class TPN:
 
         pdb.set_trace()
 
-        #TODO: inspect why values in bboxes are << 1
         scaled_bboxes = bboxes.detach().clone()
-        scaled_bboxes[:,:,:, [0, 3]] *= 150 / 19  # update H, y
-        scaled_bboxes[:,:,:, [1, 2]] *= 200 / 25  # update W, x
+        scaled_bboxes[:, [0, 3]] *= 200 / 19  # update H, y
+        scaled_bboxes[:, [1, 2]] *= 150 / 25  # update W, x
         scaled_bboxes = scaled_bboxes.numpy().astype(np.int64)
-        scaled_bboxes.resize(150,200,9,4, refcheck=False)
         
-        # slice out tubes from conv2 feature map
+        # slice tubes from conv2 feature map
         tubes = conv2.data[:, :, :,
-                           scaled_bboxes[:,:,:,2]-scaled_bboxes[:,:,:, 1]/2:\
-                           scaled_bboxes[:,:,:,2]+scaled_bboxes[:,:,:, 1]/2,
-                           scaled_bboxes[:,:,:,3]-scaled_bboxes[:,:,:, 0]/2:\
-                           scaled_bboxes[:,:,:,3]+scaled_bboxes[:,:,:, 0]/2] 
+                           scaled_bboxes[:,2]-scaled_bboxes[:, 1]/2:\
+                           scaled_bboxes[:,2]+scaled_bboxes[:, 1]/2,
+                           scaled_bboxes[:,3]-scaled_bboxes[:, 0]/2:\
+                           scaled_bboxes[:,3]+scaled_bboxes[:, 0]/2] 
         
         x1 = self.toi2(tubes)
         x1 = torch.norm(x1, p=2)  # Cx8x8x8
@@ -175,7 +180,7 @@ class TCNN(nn.Module):
         self.pool4 = nn.MaxPool3d((2, 2, 2))
         self.conv5a = nn.Conv3d(512, 512, (3, 3, 3), padding=1)
         self.conv5b = nn.Conv3d(512, 512, (3, 3, 3), padding=1)
-        self.BBoxRegressor = BBoxRegressor()
+        self.BBoxRegressor = BBoxRegressor((19, 25))
         self.TPN = TPN(512)
         self.Linker = Linker()
         self.reg_layer = nn.Conv3d(fc8_units, self.n_anchor * 4, 1, 1, 0)
@@ -187,7 +192,7 @@ class TCNN(nn.Module):
 
     def forward(self, x):
         """Build a network that maps anchor boxes to a seq. of frames."""
-        pdb.set_trace()
+
         x = self.pool1(F.leaky_relu(self.conv1(x)))
         conv2 = F.leaky_relu(self.conv2(x))
         x = self.pool2(conv2)
