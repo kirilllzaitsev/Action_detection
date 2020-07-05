@@ -21,8 +21,14 @@ Updates concerning part 2 will arrive soon.
 ```shell
 $ pip install -r requirements.txt
 ```
-- Run the program by typing
+- Train model from scratch with the following command
 
 ```shell
-$ python main.py
+$ python training.py
 ```
+
+- Evaluate model on your video
+
+```
+(currently in development)
+``` 
