@@ -140,5 +140,8 @@ cython_debuo/
 # Data
 data/
 
+# IDE
+.idea/
+
 # Notebooks
 *.ipynb
